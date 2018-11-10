@@ -1,9 +1,12 @@
 package main
 
 import (
+	"flag"
 	"fmt"
-	"github.com/sap/gorfc/gorfc"
 	"time"
+
+	"simonwaldherr.de/go/golibs/csv"
+	"simonwaldherr.de/go/saprfc"
 )
 
 // BAPI calls log
@@ -15,38 +18,61 @@ func printLog(bapi_return interface{}) {
 	}
 }
 
-func main() {
-	// Connect to ABAP system
-	SAPROUTER := "/H/123.12.123.12/E/yt6ntx/H/123.14.131.111/H/"
+var sapConnPara *saprfc.Connection
 
-	EC4 := gorfc.ConnectionParameter{
-		User:      "abapuser",
-		Passwd:    "abappass",
-		Ashost:    "10.11.12.13",
-		Saprouter: SAPROUTER,
-		Sysnr:     "200",
-		Client:    "300",
-		Trace:     "3",
-		Lang:      "EN",
+func main() {
+
+	// SAP Host connection settings
+	var user string
+	var pwd string
+	var host string
+	var router string
+	var sysnr string
+	var client string
+	var trace string
+	var lang string
+	flag.StringVar(&user, "user", "username", "sap rfc username")
+	flag.StringVar(&pwd, "pwd", "password", "sap rfc password")
+	flag.StringVar(&host, "host", "10.11.12.13", "sap host")
+	flag.StringVar(&router, "router", "/H/123.12.123.12/E/yt6ntx/H/123.14.131.111/H/", "sap router")
+	flag.StringVar(&sysnr, "sysnr", "200", "system number")
+	flag.StringVar(&client, "client", "300", "client")
+	flag.StringVar(&trace, "trace", "3", "trace")
+	flag.StringVar(&lang, "lang", "EN", "language")
+
+	// csv file with input data
+	var csvfile string
+	flag.StringVar(&csvfile, "csv", "", "user data csv file")
+
+	// csv file with input data
+	var fromuser string
+	flag.StringVar(&fromuser, "fromuser", "", "username of the source user")
+
+	// load flag input arguments
+	flag.Parse()
+
+	sapConnPara := saprfc.ConnectionParameter{
+		User:      user,
+		Passwd:    pwd,
+		Ashost:    host,
+		Saprouter: router,
+		Sysnr:     sysnr,
+		Client:    client,
+		Trace:     trace,
+		Lang:      lang,
 	}
 
-	c, _ := gorfc.Connection(EC4)
+	conn, _ := saprfc.ConnectionFromParams(sapConnPara)
 
 	// The source user, to be copied
 	unameFrom := "UNAMEFROM"
 
 	// Defaults if source user validity not maintained (undefined)
-	validFrom := time.Date(2015, time.January, 19, 0, 0, 0, 0, time.UTC)
-	validTo := time.Date(2015, time.December, 31, 0, 0, 0, 0, time.UTC)
-
-	// New users" password. For automatic generation check CREATE BAPI
-	initpwd := "InitPa$$21"
-
-	// Users to be created
-	users := []string{"UNAMETO1", "UNAMETO2"}
+	validFrom := time.Date(2018, time.January, 19, 0, 0, 0, 0, time.UTC)
+	validTo := time.Date(2023, time.December, 31, 0, 0, 0, 0, time.UTC)
 
 	// Get source user details
-	r, _ := c.Call("BAPI_USER_GET_DETAIL", map[string]interface{}{"USERNAME": unameFrom, "CACHE_RESULTS": " "})
+	r, _ := conn.Call("BAPI_USER_GET_DETAIL", map[string]interface{}{"USERNAME": unameFrom, "CACHE_RESULTS": " "})
 
 	// Set new users" defaults
 	logonData := r["LOGONDATA"].(map[string]interface{})
@@ -57,21 +83,22 @@ func main() {
 	if logonData["GLTGB"] == nil {
 		logonData["GLTGB"] = validTo
 	}
-	password := map[string]string{"BAPIPWD": initpwd}
 
 	// Create new users
 	address := r["ADDRESS"].(map[string]interface{})
 
-	for _, unameTo := range users {
-		fmt.Println(unameTo)
+	csvmap, k := csv.LoadCSVfromFile(csvfile)
 
-		address["LASTNAME"] = unameTo
-		address["FULLNAME"] = unameTo
+	for _, user := range csvmap {
+		fmt.Println(user[k["username"]])
 
-		x, _ := c.Call("BAPI_USER_CREATE1", map[string]interface{}{
-			"USERNAME":  unameTo,
+		address["LASTNAME"] = user[k["lastname"]]
+		address["FULLNAME"] = user[k["firstname"]] + user[k["lastname"]]
+
+		x, _ := conn.Call("BAPI_USER_CREATE1", map[string]interface{}{
+			"USERNAME":  user[k["username"]],
 			"LOGONDATA": logonData,
-			"PASSWORD":  password,
+			"PASSWORD":  user[k["password"]],
 			"DEFAULTS":  r["DEFAULTS"],
 			"ADDRESS":   address,
 			"COMPANY":   r["COMPANY"],
@@ -82,15 +109,15 @@ func main() {
 
 		printLog(x["RETURN"])
 
-		x, _ = c.Call("BAPI_USER_PROFILES_ASSIGN", map[string]interface{}{
-			"USERNAME": unameTo,
+		x, _ = conn.Call("BAPI_USER_PROFILES_ASSIGN", map[string]interface{}{
+			"USERNAME": user[k["username"]],
 			"PROFILES": r["PROFILES"],
 		})
 
 		printLog(x["RETURN"])
 
-		x, _ = c.Call("BAPI_USER_ACTGROUPS_ASSIGN", map[string]interface{}{
-			"USERNAME":       unameTo,
+		x, _ = conn.Call("BAPI_USER_ACTGROUPS_ASSIGN", map[string]interface{}{
+			"USERNAME":       user[k["username"]],
 			"ACTIVITYGROUPS": r["ACTIVITYGROUPS"],
 		})
 
@@ -98,5 +125,5 @@ func main() {
 	}
 
 	// Finished
-	fmt.Printf("%s copied to %d new users.\nBye!", unameFrom, len(users))
+	fmt.Printf("%s copied to %d new users.\nBye!", unameFrom, len(csvmap))
 }
